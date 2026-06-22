@@ -1380,32 +1380,46 @@ main {
 }
 .results-body {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 18px;
+  grid-template-columns: 1fr 1fr;
+  gap: 28px;
   text-align: left;
   border-top: 1px solid var(--line);
   padding-top: 18px;
 }
-.results-stat-title {
+.results-team-col:last-child { text-align: right; }
+.rt-head {
+  font-family: 'Fraunces', serif;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--navy);
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+  border-bottom: 2px solid var(--line-strong);
+}
+.rt-stat { margin-bottom: 14px; }
+.rt-stat-title {
   font-family: 'Overpass', sans-serif;
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.14em;
   color: var(--orange);
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
-.results-stat ul { margin: 0; padding: 0; list-style: none; }
-.results-stat li {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
+.rt-stat ul { margin: 0; padding: 0; list-style: none; }
+.rt-stat li {
   font-family: 'Overpass', sans-serif;
   font-size: 14px;
   color: var(--navy);
-  padding: 3px 0;
+  padding: 2px 0;
 }
-.results-stat .re-team { color: var(--text-soft); font-size: 12px; }
+.rt-count { color: var(--orange); font-weight: 700; }
+.rt-none {
+  font-family: 'Overpass', sans-serif;
+  font-size: 13px;
+  color: var(--text-mute);
+  font-style: italic;
+}
 .results-empty {
   grid-column: 1 / -1;
   font-family: 'Overpass', sans-serif;
@@ -1413,6 +1427,10 @@ main {
   color: var(--text-soft);
   font-style: italic;
   text-align: center;
+}
+@media (max-width: 480px) {
+  .results-body { gap: 16px; }
+  .rt-head { font-size: 14px; }
 }
 
 .leaders-grid {
@@ -3637,19 +3655,40 @@ function openResultsModal(matchId) {
     soLine.style.display = "none";
   }
 
-  function statBlock(title, list) {
-    if (!list || !list.length) return "";
-    const side = t => t === "away" ? awayName : homeName;
-    const items = list.map(e =>
-      `<li><span class="re-player">${esc(e.player)}</span><span class="re-team">${esc(side(e.team))}</span></li>`
-    ).join("");
-    return `<div class="results-stat"><div class="results-stat-title">${title}</div><ul>${items}</ul></div>`;
+  // Build one column per team, with that team's own stats nested beneath it.
+  // Mirrors the scoreline: home on the left, away on the right.
+  function teamColumn(sideKey, teamId) {
+    const statDefs = [
+      { key: "goals",   label: "Goals" },
+      { key: "assists", label: "Assists" },
+      { key: "saves",   label: "Saves" },
+      { key: "pks",     label: "Penalty Scorers" },
+    ];
+    let inner = "";
+    statDefs.forEach(sd => {
+      const list = (ev[sd.key] || []).filter(e => (e.team === "away" ? "away" : "home") === sideKey);
+      if (!list.length) return;
+      // Collapse repeats: one line per player, with a count when more than one.
+      // Preserves first-appearance order.
+      const counts = new Map();
+      list.forEach(e => counts.set(e.player, (counts.get(e.player) || 0) + 1));
+      const items = [...counts.entries()].map(([player, n]) =>
+        `<li>${esc(player)}${n > 1 ? ` <span class="rt-count">(${n})</span>` : ""}</li>`
+      ).join("");
+      inner += `<div class="rt-stat"><div class="rt-stat-title">${sd.label}</div><ul>${items}</ul></div>`;
+    });
+    if (!inner) inner = `<div class="rt-none">—</div>`;
+    return `
+      <div class="results-team-col">
+        <div class="rt-head">${getTeamFlag(teamId)} ${esc(getTeamDisplayName(teamId))}</div>
+        ${inner}
+      </div>`;
   }
 
-  const blocks = statBlock("Goals", ev.goals) + statBlock("Assists", ev.assists)
-    + statBlock("Saves", ev.saves) + statBlock("Penalty Scorers", ev.pks);
-  document.getElementById("results-body").innerHTML = blocks ||
-    `<div class="results-empty">No player stats recorded for this match.</div>`;
+  const anyStats = ["goals","assists","saves","pks"].some(k => (ev[k] || []).length);
+  document.getElementById("results-body").innerHTML = anyStats
+    ? teamColumn("home", homeId) + teamColumn("away", awayId)
+    : `<div class="results-empty">No player stats recorded for this match.</div>`;
 
   // Admins get an "Edit result" shortcut.
   const editBtn = document.getElementById("results-edit");
