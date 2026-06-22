@@ -1237,6 +1237,66 @@ main {
   padding-top: 16px;
   text-align: left;
 }
+.pk-editor {
+  border-top: 2px solid var(--orange);
+  margin-top: 18px;
+  padding-top: 16px;
+  text-align: left;
+}
+.pk-banner {
+  font-family: 'Overpass', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--navy);
+  background: rgba(232,119,34,0.12);
+  border-left: 3px solid var(--orange);
+  padding: 8px 12px;
+  margin-bottom: 14px;
+}
+.pk-score-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.pk-score-row .pk-label {
+  font-family: 'Overpass', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--navy);
+  flex: 1;
+  text-align: right;
+}
+.pk-score-row .pk-label.away { text-align: left; }
+.pk-score-row .pk-score { width: 56px; }
+.pk-score-row .pk-dash { color: var(--text-mute); font-size: 13px; }
+.pk-sub {
+  text-align: center;
+  font-family: 'Overpass', sans-serif;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-mute);
+  margin-bottom: 14px;
+}
+.pk-note {
+  font-family: 'Overpass', sans-serif;
+  font-size: 12px;
+  color: var(--orange);
+  min-height: 16px;
+  margin-top: 8px;
+}
+.results-shootout {
+  text-align: center;
+  font-family: 'Overpass', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--orange);
+  margin: 2px 0 6px;
+}
 .stats-note {
   font-family: 'Overpass', sans-serif;
   font-size: 12px;
@@ -1873,6 +1933,23 @@ main {
       </div>
     </div>
 
+    <div class="pk-editor" id="pk-editor" style="display:none;">
+      <div class="pk-banner" id="pk-banner">Regulation ended level — this knockout game needs a penalty shootout.</div>
+      <div class="pk-score-row">
+        <span class="pk-label" id="pk-home-label">Home</span>
+        <input type="number" min="0" max="30" class="score-input pk-score" id="pk-home-score" placeholder="0">
+        <span class="pk-dash">( – )</span>
+        <input type="number" min="0" max="30" class="score-input pk-score" id="pk-away-score" placeholder="0">
+        <span class="pk-label away" id="pk-away-label">Away</span>
+      </div>
+      <div class="pk-sub">Penalty shootout score (decides the winner)</div>
+      <div class="stat-group" data-stat="pks">
+        <div class="stat-group-head"><span>Penalty Scorers</span><button class="stat-add" data-add="pks">+ Add PK scorer</button></div>
+        <div class="stat-rows" id="rows-pks"></div>
+      </div>
+      <div class="pk-note" id="pk-note"></div>
+    </div>
+
     <div class="modal-actions">
       <button class="btn btn-danger" id="modal-clear">Clear score</button>
       <button class="btn btn-secondary" id="modal-cancel">Cancel</button>
@@ -1886,6 +1963,7 @@ main {
   <div class="modal modal-wide">
     <div class="modal-eyebrow" id="results-eyebrow">Result</div>
     <div class="results-scoreline" id="results-scoreline"></div>
+    <div class="results-shootout" id="results-shootout" style="display:none;"></div>
     <div class="results-sub" id="results-sub"></div>
     <div class="results-body" id="results-body"></div>
     <div class="modal-actions">
@@ -2374,6 +2452,80 @@ function getRankedByPosition(position) {
   });
 }
 
+// Cup quarterfinal seeding with same-group rematch avoidance.
+//
+// Base seeding (by rank across all groups):
+//   CQF1: best 1st        vs 2nd-best 3rd
+//   CQF2: 2nd-best 1st    vs best 3rd
+//   CQF3: 3rd-best 1st    vs 3rd-best 2nd
+//   CQF4: best 2nd        vs 2nd-best 2nd
+//
+// To avoid two group-mates meeting again in the QFs, we only reorder teams
+// *within their own seed tier* (so the seeding integrity is preserved):
+//   - the two 3rd-place teams used in CQF1/CQF2 may swap
+//   - the three 2nd-place teams used in CQF3/CQF4 may be permuted
+// We search those combinations for one with zero same-group matchups,
+// preferring the arrangement closest to the base seeding. If none is
+// fully clash-free, we keep the one with the fewest clashes.
+// Returns { CQF1:{home,away}, CQF2:{...}, CQF3:{...}, CQF4:{...} } of team
+// objects ({teamId, group}), or null until all groups are complete.
+let _cupSeedingCache = null;
+let _cupSeedingKey = null;
+
+function getCupSeeding() {
+  const firsts  = getRankedByPosition(0);
+  const seconds = getRankedByPosition(1);
+  const thirds  = getRankedByPosition(2);
+  if (!firsts || !seconds || !thirds) return null;
+
+  // Cache by the resolved team identities so we don't recompute every render.
+  const key = JSON.stringify([
+    firsts.map(t => t.teamId), seconds.map(t => t.teamId), thirds.map(t => t.teamId)
+  ]);
+  if (_cupSeedingKey === key && _cupSeedingCache) return _cupSeedingCache;
+
+  const clash = (a, b) => a && b && a.group === b.group;
+
+  // Candidate orderings, ordered by how close they are to the base seeding
+  // (index 0 = original). thirdOrders: arrangement of [best3rd, 2nd3rd].
+  const thirdOrders = [[0, 1], [1, 0]];
+  // secondOrders: arrangement of the three 2nd-place teams across
+  // [CQF4.home, CQF4.away, CQF3.away]. Base = [0,1,2].
+  const secondOrders = [
+    [0, 1, 2], [0, 2, 1], [1, 0, 2], [2, 1, 0], [1, 2, 0], [2, 0, 1]
+  ];
+
+  let best = null;
+  for (let ti = 0; ti < thirdOrders.length; ti++) {
+    const [t3hi_for_cqf2, t3_for_cqf1] = thirdOrders[ti]; // see mapping below
+    for (let si = 0; si < secondOrders.length; si++) {
+      const [s4h, s4a, s3a] = secondOrders[si];
+      const layout = {
+        CQF1: { home: firsts[0],  away: thirds[thirdOrders[ti][1]] }, // best1st vs (a 3rd)
+        CQF2: { home: firsts[1],  away: thirds[thirdOrders[ti][0]] }, // 2nd-1st vs (other 3rd)
+        CQF3: { home: firsts[2],  away: seconds[s3a] },               // 3rd-1st vs (a 2nd)
+        CQF4: { home: seconds[s4h], away: seconds[s4a] },             // 2nd vs 2nd
+      };
+      // Count same-group clashes.
+      let clashes = 0;
+      ["CQF1","CQF2","CQF3","CQF4"].forEach(m => { if (clash(layout[m].home, layout[m].away)) clashes++; });
+      // Penalty for deviating from base seeding (prefer minimal reshuffle).
+      const deviation = ti + si;
+      const scoreTuple = [clashes, deviation];
+      if (!best || scoreTuple[0] < best.score[0] ||
+         (scoreTuple[0] === best.score[0] && scoreTuple[1] < best.score[1])) {
+        best = { layout, score: scoreTuple };
+        if (clashes === 0 && deviation === 0) break;
+      }
+    }
+    if (best && best.score[0] === 0 && best.score[1] === 0) break;
+  }
+
+  _cupSeedingKey = key;
+  _cupSeedingCache = best ? best.layout : null;
+  return _cupSeedingCache;
+}
+
 // ============================================================
 // BRACKET RESOLUTION
 // ============================================================
@@ -2413,7 +2565,25 @@ function resolveSource(src) {
     return s ? s[3].teamId : null;
   }
   // Ranked seeding tokens: best1st1..3, best2nd1..3, best3rd1..3
-  // (Nth best team finishing in that group position, across all groups.)
+  // For the Cup QFs specifically, resolve through getCupSeeding() so the
+  // same-group rematch avoidance applies. The CQF source fields use these
+  // exact tokens (see DEFAULT_SCHEDULE):
+  //   CQF1: best1st1 / best3rd2   CQF2: best1st2 / best3rd1
+  //   CQF3: best1st3 / best2nd3   CQF4: best2nd1 / best2nd2
+  const cupTokenMap = {
+    best1st1: ["CQF1", "home"], best3rd2: ["CQF1", "away"],
+    best1st2: ["CQF2", "home"], best3rd1: ["CQF2", "away"],
+    best1st3: ["CQF3", "home"], best2nd3: ["CQF3", "away"],
+    best2nd1: ["CQF4", "home"], best2nd2: ["CQF4", "away"],
+  };
+  if (cupTokenMap[src]) {
+    const seeding = getCupSeeding();
+    if (!seeding) return null;
+    const [mid, side] = cupTokenMap[src];
+    const team = seeding[mid][side];
+    return team ? team.teamId : null;
+  }
+  // Any other ranked token (e.g. worst3rd handled below) falls through.
   const ranked = src.match(/^best(1st|2nd|3rd)([123])$/);
   if (ranked) {
     const pos = { "1st": 0, "2nd": 1, "3rd": 2 }[ranked[1]];
@@ -2438,9 +2608,18 @@ function resolveSource(src) {
     const homeTeam = getMatchTeam(refMatchId, "home");
     const awayTeam = getMatchTeam(refMatchId, "away");
     if (!homeTeam || !awayTeam) return null;
-    if (score.home === score.away) return null;
-    const winner = score.home > score.away ? homeTeam : awayTeam;
-    const loser = score.home > score.away ? awayTeam : homeTeam;
+
+    // Decide the winner: by regulation score, or by the penalty shootout if tied.
+    let homeWon;
+    if (score.home !== score.away) {
+      homeWon = score.home > score.away;
+    } else if (score.shootout && score.shootout.home !== score.shootout.away) {
+      homeWon = score.shootout.home > score.shootout.away;
+    } else {
+      return null; // tied with no (or invalid) shootout — winner undecided
+    }
+    const winner = homeWon ? homeTeam : awayTeam;
+    const loser = homeWon ? awayTeam : homeTeam;
     return role === "winner" ? winner : loser;
   }
 
@@ -2925,16 +3104,21 @@ function renderTeams() {
 
 function aggregateStat(stat) {
   const tally = {};
+  // Per the tournament's choice, penalty-shootout goals count toward Top Scorers,
+  // so the "goals" board also folds in each match's "pks" list.
+  const sources = stat === "goals" ? ["goals", "pks"] : [stat];
   Object.keys(state.scores).forEach(matchId => {
     const sc = state.scores[matchId];
-    if (!sc || !sc.events || !sc.events[stat]) return;
+    if (!sc || !sc.events) return;
     const homeName = getTeamDisplayName(getMatchTeam(matchId, "home"));
     const awayName = getTeamDisplayName(getMatchTeam(matchId, "away"));
-    sc.events[stat].forEach(e => {
-      const teamName = e.team === "away" ? awayName : homeName;
-      const key = `${e.player}||${teamName}`;
-      if (!tally[key]) tally[key] = { player: e.player, team: teamName, count: 0 };
-      tally[key].count++;
+    sources.forEach(srcKey => {
+      (sc.events[srcKey] || []).forEach(e => {
+        const teamName = e.team === "away" ? awayName : homeName;
+        const key = `${e.player}||${teamName}`;
+        if (!tally[key]) tally[key] = { player: e.player, team: teamName, count: 0 };
+        tally[key].count++;
+      });
     });
   });
   return Object.values(tally).sort((a, b) =>
@@ -3181,7 +3365,16 @@ function resetDraw() {
 // ============================================================
 
 // Working buffer for the match's events while the editor is open.
-let editEvents = { goals: [], assists: [], saves: [] };
+// Stat types handled by the in-modal editor. "pks" only applies to tied knockouts.
+const STAT_TYPES = ["goals", "assists", "saves", "pks"];
+
+// Knockout = anything that isn't a group game or a friendly (can't end tied).
+function isKnockoutRound(round) {
+  return !["group", "friendly"].includes(round);
+}
+
+let editEvents = { goals: [], assists: [], saves: [], pks: [] };
+let editShootout = { home: "", away: "" };
 
 function openScoreModal(matchId) {
   const match = DEFAULT_SCHEDULE.find(m => m.id === matchId);
@@ -3207,11 +3400,42 @@ function openScoreModal(matchId) {
     goals:   (ev.goals   || []).map(e => ({ ...e })),
     assists: (ev.assists || []).map(e => ({ ...e })),
     saves:   (ev.saves   || []).map(e => ({ ...e })),
+    pks:     (ev.pks     || []).map(e => ({ ...e })),
   };
+  const so = (existing && existing.shootout) || null;
+  editShootout = so ? { home: so.home, away: so.away } : { home: "", away: "" };
+
+  // PK score labels.
+  document.getElementById("pk-home-label").textContent = getTeamDisplayName(homeId);
+  document.getElementById("pk-away-label").textContent = getTeamDisplayName(awayId);
+  document.getElementById("pk-home-score").value = editShootout.home;
+  document.getElementById("pk-away-score").value = editShootout.away;
+
   renderStatRows();
+  updatePkVisibility();
 
   document.getElementById("modal").classList.add("active");
   setTimeout(() => document.getElementById("modal-home-score").focus(), 50);
+}
+
+// Show the penalty section only for knockout games whose regulation score is tied.
+function updatePkVisibility() {
+  const match = DEFAULT_SCHEDULE.find(m => m.id === state.editingMatchId);
+  const h = parseInt(document.getElementById("modal-home-score").value);
+  const a = parseInt(document.getElementById("modal-away-score").value);
+  const tiedKnockout = match && isKnockoutRound(match.round) && !isNaN(h) && !isNaN(a) && h === a;
+  document.getElementById("pk-editor").style.display = tiedKnockout ? "block" : "none";
+  updatePkNote();
+}
+
+function updatePkNote() {
+  const note = document.getElementById("pk-note");
+  if (!note) return;
+  const ph = parseInt(document.getElementById("pk-home-score").value);
+  const pa = parseInt(document.getElementById("pk-away-score").value);
+  if (isNaN(ph) || isNaN(pa)) { note.textContent = "Enter the shootout score to set the winner."; return; }
+  if (ph === pa) { note.textContent = "Shootout can't be tied — one side must have more."; return; }
+  note.textContent = "";
 }
 
 // Build the player <option> list for a given slot (resolved team), from roster.
@@ -3237,8 +3461,9 @@ function renderStatRows() {
   const homeName = getTeamDisplayName(homeId);
   const awayName = getTeamDisplayName(awayId);
 
-  ["goals", "assists", "saves"].forEach(stat => {
+  STAT_TYPES.forEach(stat => {
     const container = document.getElementById("rows-" + stat);
+    if (!container) return;
     container.innerHTML = editEvents[stat].map((e, i) => {
       const teamSlot = (e.team === "away") ? awayId : homeId;
       const poolId = state.assignments[teamSlot];
@@ -3260,8 +3485,8 @@ function renderStatRows() {
     }).join("");
   });
 
-  // Bind row interactions.
-  document.querySelectorAll("#stats-editor .stat-row").forEach(row => {
+  // Bind row interactions across the whole modal (stats + PK section).
+  document.querySelectorAll("#modal .stat-row").forEach(row => {
     const stat = row.dataset.stat, i = parseInt(row.dataset.i, 10);
     row.querySelector(".stat-team").addEventListener("change", e => {
       editEvents[stat][i].team = e.target.value;
@@ -3284,7 +3509,7 @@ function renderStatRows() {
       editEvents[stat][i].player = e.target.value.trim();
     });
   });
-  document.querySelectorAll("#stats-editor .stat-remove").forEach(btn => {
+  document.querySelectorAll("#modal .stat-remove").forEach(btn => {
     btn.addEventListener("click", () => {
       const [stat, idx] = btn.dataset.remove.split(":");
       editEvents[stat].splice(parseInt(idx, 10), 1);
@@ -3292,7 +3517,7 @@ function renderStatRows() {
       updateStatsNote();
     });
   });
-  document.querySelectorAll("#stats-editor .stat-add").forEach(btn => {
+  document.querySelectorAll("#modal .stat-add").forEach(btn => {
     btn.onclick = () => {
       const stat = btn.dataset.add;
       editEvents[stat].push({ team: "home", player: "" });
@@ -3332,21 +3557,38 @@ function saveScore() {
   }
 
   const match = DEFAULT_SCHEDULE.find(m => m.id === state.editingMatchId);
-  if (home === away && match && !["group", "friendly"].includes(match.round)) {
-    if (!confirm("Knockout matches typically can't end in a tie. Save anyway? You'll resolve the winner separately.")) {
+  const tiedKnockout = home === away && match && isKnockoutRound(match.round);
+
+  // For a tied knockout, require a valid (non-tied) shootout score to set the winner.
+  let shootout = null;
+  if (tiedKnockout) {
+    const ph = parseInt(document.getElementById("pk-home-score").value);
+    const pa = parseInt(document.getElementById("pk-away-score").value);
+    if (isNaN(ph) || isNaN(pa) || ph < 0 || pa < 0) {
+      alert("This knockout game is tied — enter the penalty shootout score to decide the winner.");
       return;
     }
+    if (ph === pa) {
+      alert("A penalty shootout can't end level. One team must have more penalties than the other.");
+      return;
+    }
+    shootout = { home: ph, away: pa };
   }
 
   // Clean events: keep only rows with a player name.
   const clean = {};
-  ["goals", "assists", "saves"].forEach(stat => {
+  STAT_TYPES.forEach(stat => {
     clean[stat] = editEvents[stat]
       .filter(e => (e.player || "").trim())
       .map(e => ({ team: e.team === "away" ? "away" : "home", player: e.player.trim() }));
   });
+  // Drop the pks list entirely if this wasn't a shootout.
+  if (!shootout) delete clean.pks;
 
-  state.scores[state.editingMatchId] = { home, away, status: 'final', events: clean };
+  const record = { home, away, status: 'final', events: clean };
+  if (shootout) record.shootout = shootout;
+
+  state.scores[state.editingMatchId] = record;
   saveState();
   closeModal();
   render();
@@ -3380,8 +3622,20 @@ function openResultsModal(matchId) {
   document.getElementById("results-sub").textContent =
     `${match.field} · Day ${match.day}, ${formatTime(match.time).time} ${formatTime(match.time).period}`;
 
-  const ev = score.events || { goals: [], assists: [], saves: [] };
+  const ev = score.events || { goals: [], assists: [], saves: [], pks: [] };
   const homeName = getTeamDisplayName(homeId), awayName = getTeamDisplayName(awayId);
+
+  // Penalty shootout line, if this match went to penalties.
+  const soLine = document.getElementById("results-shootout");
+  if (score.shootout && score.shootout.home !== score.shootout.away) {
+    const winnerName = score.shootout.home > score.shootout.away ? homeName : awayName;
+    const hi = Math.max(score.shootout.home, score.shootout.away);
+    const lo = Math.min(score.shootout.home, score.shootout.away);
+    soLine.textContent = `${winnerName} won ${hi}–${lo} on penalties`;
+    soLine.style.display = "block";
+  } else {
+    soLine.style.display = "none";
+  }
 
   function statBlock(title, list) {
     if (!list || !list.length) return "";
@@ -3392,7 +3646,8 @@ function openResultsModal(matchId) {
     return `<div class="results-stat"><div class="results-stat-title">${title}</div><ul>${items}</ul></div>`;
   }
 
-  const blocks = statBlock("Goals", ev.goals) + statBlock("Assists", ev.assists) + statBlock("Saves", ev.saves);
+  const blocks = statBlock("Goals", ev.goals) + statBlock("Assists", ev.assists)
+    + statBlock("Saves", ev.saves) + statBlock("Penalty Scorers", ev.pks);
   document.getElementById("results-body").innerHTML = blocks ||
     `<div class="results-empty">No player stats recorded for this match.</div>`;
 
@@ -3532,8 +3787,10 @@ document.getElementById("modal-clear").addEventListener("click", clearScore);
 document.getElementById("modal").addEventListener("click", e => {
   if (e.target.id === "modal") closeModal();
 });
-document.getElementById("modal-home-score").addEventListener("input", updateStatsNote);
-document.getElementById("modal-away-score").addEventListener("input", updateStatsNote);
+document.getElementById("modal-home-score").addEventListener("input", () => { updateStatsNote(); updatePkVisibility(); });
+document.getElementById("modal-away-score").addEventListener("input", () => { updateStatsNote(); updatePkVisibility(); });
+document.getElementById("pk-home-score").addEventListener("input", e => { editShootout.home = e.target.value; updatePkNote(); });
+document.getElementById("pk-away-score").addEventListener("input", e => { editShootout.away = e.target.value; updatePkNote(); });
 
 document.getElementById("results-close").addEventListener("click", closeResultsModal);
 document.getElementById("results-modal").addEventListener("click", e => {
