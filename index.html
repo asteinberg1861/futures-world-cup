@@ -962,6 +962,47 @@ main {
   margin-top: 5px;
 }
 .team-card .tc-group.undrawn { color: var(--text-soft); opacity: 0.7; }
+.team-card .tc-manager {
+  font-family: 'Overpass', sans-serif;
+  font-size: 14px;
+  color: var(--navy);
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+}
+.team-card .tc-manager .tc-manager-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-mute);
+  margin-right: 8px;
+}
+.team-card .tc-manager.undrawn { color: var(--text-soft); font-style: italic; opacity: 0.8; }
+.mgr-edit-field { margin: 4px 0 18px; }
+.mgr-edit-field label {
+  display: block;
+  font-family: 'Overpass', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--navy);
+  opacity: 0.7;
+  margin-bottom: 6px;
+}
+.mgr-edit-field input {
+  width: 100%;
+  padding: 10px 12px;
+  font-family: 'Overpass', sans-serif;
+  font-size: 15px;
+  border: 1px solid var(--line-strong);
+  border-radius: 2px;
+  background: #fff;
+  color: var(--navy);
+  box-sizing: border-box;
+}
+.mgr-edit-field input:focus { outline: none; border-color: var(--orange); }
 .team-card .tc-roster {
   border-top: 1px solid var(--line-soft);
   padding-top: 12px;
@@ -2038,6 +2079,10 @@ main {
     <div class="modal-eyebrow" id="roster-modal-eyebrow">Edit Roster</div>
     <div class="modal-title" id="roster-modal-title">Team</div>
     <div class="modal-sub" id="roster-modal-sub">Up to 10 players. Leave a row blank to skip it.</div>
+    <div class="mgr-edit-field">
+      <label for="roster-manager">Manager</label>
+      <input type="text" id="roster-manager" maxlength="60" placeholder="Manager name (optional)">
+    </div>
     <div class="roster-edit-head">
       <span class="reh-rowidx">#</span>
       <span class="reh-jersey">No.</span>
@@ -2130,7 +2175,7 @@ main {
       if (!firebaseReady) return;
       onSnapshot(scoreDocRef, (snap) => {
         const data = snap.exists() ? snap.data() : {};
-        cb({ scores: data.scores || {}, assignments: data.assignments || {}, rosters: data.rosters || {} });
+        cb({ scores: data.scores || {}, assignments: data.assignments || {}, rosters: data.rosters || {}, managers: data.managers || {} });
       }, (err) => console.error("Firestore listen error:", err));
     },
 
@@ -2147,7 +2192,7 @@ main {
       try {
         const snap = await getDoc(scoreDocRef);
         const data = snap.exists() ? snap.data() : {};
-        return { scores: data.scores || {}, assignments: data.assignments || {}, rosters: data.rosters || {} };
+        return { scores: data.scores || {}, assignments: data.assignments || {}, rosters: data.rosters || {}, managers: data.managers || {} };
       } catch (e) { console.error("fetchOnce failed:", e); return null; }
     },
 
@@ -2215,17 +2260,17 @@ const TEAMS = {
 // drawn into. `roster` is ready for player names to be added later.
 const DRAW_POOL = [
   { id: "arg", name: "Argentina", flag: "🇦🇷", roster: [] },
-  { id: "ita", name: "Italy",     flag: "🇮🇹", roster: [] },
-  { id: "jpn", name: "Japan",     flag: "🇯🇵", roster: [] },
-  { id: "mex", name: "Mexico",    flag: "🇲🇽", roster: [] },
-  { id: "bra", name: "Brazil",    flag: "🇧🇷", roster: [] },
-  { id: "por", name: "Portugal",  flag: "🇵🇹", roster: [] },
-  { id: "fra", name: "France",    flag: "🇫🇷", roster: [] },
-  { id: "eng", name: "England",   flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿", roster: [] },
-  { id: "sco", name: "Scotland",  flag: "🏴󠁧󠁢󠁳󠁣󠁴󠁿", roster: [] },
-  { id: "esp", name: "Spain",     flag: "🇪🇸", roster: [] },
-  { id: "bel", name: "Belgium",   flag: "🇧🇪", roster: [] },
-  { id: "cro", name: "Croatia",   flag: "🇭🇷", roster: [] },
+  { id: "ita", name: "Italy", flag: "🇮🇹", roster: [] },
+  { id: "jpn", name: "Japan", flag: "🇯🇵", roster: [] },
+  { id: "mex", name: "Mexico", flag: "🇲🇽", roster: [] },
+  { id: "bra", name: "Brazil", flag: "🇧🇷", roster: [] },
+  { id: "por", name: "Portugal", flag: "🇵🇹", roster: [] },
+  { id: "fra", name: "France", flag: "🇫🇷", roster: [] },
+  { id: "eng", name: "England", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿", roster: [] },
+  { id: "sco", name: "Scotland", flag: "🏴󠁧󠁢󠁳󠁣󠁴󠁿", roster: [] },
+  { id: "esp", name: "Spain", flag: "🇪🇸", roster: [] },
+  { id: "bel", name: "Belgium", flag: "🇧🇪", roster: [] },
+  { id: "cro", name: "Croatia", flag: "🇭🇷", roster: [] },
 ];
 
 const POOL_BY_ID = Object.fromEntries(DRAW_POOL.map(t => [t.id, t]));
@@ -2310,6 +2355,7 @@ let state = {
   scores: {},
   assignments: {},   // slotId -> pool team id  (set during the live draw)
   rosters: {},        // poolTeamId -> [ {num, name, pos}, ... ]
+  managers: {},       // poolTeamId -> "Manager Name"
   adminMode: false,   // UI: are edit affordances shown
   isAdmin: false,     // auth: is the user a signed-in, allowlisted admin
   adminEmail: null,   // which account is signed in
@@ -2328,6 +2374,7 @@ function loadLocalCache() {
       state.scores = parsed.scores || {};
       state.assignments = parsed.assignments || {};
       state.rosters = parsed.rosters || {};
+      state.managers = parsed.managers || {};
     }
   } catch (e) { console.warn("Local load failed:", e); }
 }
@@ -2338,6 +2385,7 @@ function writeLocalCache() {
       scores: state.scores,
       assignments: state.assignments,
       rosters: state.rosters,
+      managers: state.managers,
     }));
   } catch (e) { console.warn("Local save failed:", e); }
 }
@@ -3088,6 +3136,11 @@ function renderTeams() {
 
     const sizeLabel = `${namedCount} player${namedCount === 1 ? "" : "s"}`;
 
+    const mgr = (state.managers[team.id] || "").trim();
+    const mgrLine = mgr
+      ? `<div class="tc-manager"><span class="tc-manager-label">Manager</span> ${esc(mgr)}</div>`
+      : `<div class="tc-manager undrawn"><span class="tc-manager-label">Manager</span> To be assigned</div>`;
+
     const editBtn = state.adminMode
       ? `<button class="roster-edit-btn" data-team="${team.id}">Edit roster</button>`
       : "";
@@ -3101,6 +3154,7 @@ function renderTeams() {
             ${groupLine}
           </div>
         </div>
+        ${mgrLine}
         <div class="tc-roster">
           <div class="tc-roster-label">Roster <span class="tc-roster-count">${sizeLabel}</span></div>
           ${rosterBody}
@@ -3186,6 +3240,7 @@ function openRosterModal(poolId) {
     `${team.flag ? team.flag + " " : ""}${esc(team.name)}`;
   document.getElementById("roster-modal-sub").textContent =
     `Up to ${ROSTER_MAX} players. Leave a row blank to skip it.`;
+  document.getElementById("roster-manager").value = state.managers[poolId] || "";
 
   const existing = getRoster(poolId);
   const rows = [];
@@ -3225,7 +3280,13 @@ function saveRosterEdits() {
   // Keep only rows that have a name; drop fully-empty rows.
   const cleaned = draft.filter(p => p.name);
   state.rosters[rosterEditingTeam] = cleaned;
-  saveRosters();
+
+  // Manager (optional). Store trimmed name, or remove the entry if blank.
+  const mgr = document.getElementById("roster-manager").value.trim();
+  if (mgr) state.managers[rosterEditingTeam] = mgr;
+  else delete state.managers[rosterEditingTeam];
+
+  pushToCloud({ rosters: state.rosters, managers: state.managers });
   closeRosterModal();
   render();
 }
@@ -3932,6 +3993,7 @@ function connectFirebase() {
     }
     if (rosterEditingTeam === null) {
       state.rosters = data.rosters || {};
+      state.managers = data.managers || {};
     }
     writeLocalCache();
     render();
