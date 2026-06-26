@@ -428,6 +428,7 @@ main {
 .pos-1 .pos-marker, .pos-2 .pos-marker { background: var(--green); }
 .pos-3 .pos-marker { background: var(--yellow); }
 .pos-4 .pos-marker { background: var(--warm-gray); }
+.pos-3-demoted .pos-marker { background: var(--warm-gray); }
 
 .pos-marker {
   display: inline-block;
@@ -1954,7 +1955,7 @@ main {
   <div class="draw-controls">
     <button class="btn btn-primary" id="draw-random">Draw random team →</button>
     <span class="draw-remaining" id="draw-remaining"></span>
-    <button class="btn btn-danger" id="draw-reset" style="margin-left:auto;">Reset draw</button>
+    <button class="btn btn-danger" id="draw-reset" style="margin-left:auto;">Reset tournament</button>
   </div>
 
   <div class="draw-grid" id="draw-grid"></div>
@@ -2723,6 +2724,14 @@ function isSlotUndrawn(slotId) {
 
 function renderGroupStandings(container) {
   container.innerHTML = "";
+
+  // Once all groups are done, find which group holds the WORST third-place team
+  // (the one demoted to the Shield). Its 3rd-place row gets the grey flag; the
+  // other two third-place teams keep the yellow (Cup) flag. Before completion,
+  // all three stay yellow (provisional), matching the legend.
+  const rankedThirds = getRankedByPosition(2); // null until all groups complete
+  const demotedThirdGroup = rankedThirds ? rankedThirds[rankedThirds.length - 1].group : null;
+
   ["A","B","C"].forEach(letter => {
     const standings = getGroupStandings(letter);
     const card = document.createElement("div");
@@ -2751,8 +2760,13 @@ function renderGroupStandings(container) {
           </tr>
         </thead>
         <tbody>
-          ${standings.map((s, i) => `
-            <tr class="pos-${i+1}">
+          ${standings.map((s, i) => {
+            // Default coloring by finishing position. Override the 3rd-place
+            // team that is demoted to the Shield so it shows grey, not yellow.
+            let posClass = `pos-${i+1}`;
+            if (i === 2 && demotedThirdGroup === letter) posClass = "pos-3-demoted";
+            return `
+            <tr class="${posClass}">
               <td class="team-cell"><span class="pos-marker">${i+1}</span><span class="flag">${getTeamFlag(s.teamId)}</span>${getTeamDisplayName(s.teamId)}</td>
               <td>${s.played}</td>
               <td>${s.won}</td>
@@ -2763,7 +2777,8 @@ function renderGroupStandings(container) {
               <td>${s.gf - s.ga > 0 ? '+' : ''}${s.gf - s.ga}</td>
               <td class="pts">${s.pts}</td>
             </tr>
-          `).join("")}
+          `;
+          }).join("")}
         </tbody>
       </table>
     `;
@@ -3433,9 +3448,15 @@ function clearDrawSlot() {
 
 function resetDraw() {
   if (!state.isAdmin) return;
-  if (!confirm("Clear ALL draw assignments? Every slot goes back to its placeholder.")) return;
+  if (!confirm(
+    "Reset the entire tournament?\n\n" +
+    "This clears the draw (all teams return to placeholder slots) AND every match score and statistic — group games, knockouts, goals, assists, saves, and shootouts.\n\n" +
+    "Rosters and managers are kept. This cannot be undone."
+  )) return;
   state.assignments = {};
-  saveAssignments();
+  state.scores = {};
+  // Push both cleared maps in a single sync so devices reset atomically.
+  pushToCloud({ assignments: state.assignments, scores: state.scores });
   render();
 }
 
